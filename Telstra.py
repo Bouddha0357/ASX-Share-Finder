@@ -55,13 +55,14 @@ def run_strategy():
             ma50 = p.rolling(50).mean()
             ma200 = p.rolling(200).mean()
             
-            # Spread Calculation
+            # Spread Calculation (Left Axis)
             spread = (ma20 / ma50) - 1
             
             slope = (ma200.iloc[-1] - ma200.iloc[-6]) / ma200.iloc[-6]
             if slope < 0: continue
 
             pullback_val = spread.iloc[-1]
+            # Curl Logic
             is_curling = spread.iloc[-1] > spread.iloc[-2]
 
             if pullback_val < -0.04 and is_curling:
@@ -75,7 +76,6 @@ def run_strategy():
                     "Daily Turnover": f"${round(turnover/1000)}k",
                     "Trend": "Rising" if slope > 0.001 else "Stable"
                 })
-                # Store for plotting
                 found_data[ticker] = pd.DataFrame({
                     'Close': p, 'MA20': ma20, 'MA50': ma50, 
                     'MA200': ma200, 'Spread': spread
@@ -90,45 +90,54 @@ def run_strategy():
         st.dataframe(df_final, use_container_width=True)
 
         st.divider()
-        st.subheader("📊 Multi-Axis Technical View")
+        st.subheader("📊 Dark Technical Analysis")
         selected_ticker = st.selectbox("Select Ticker", df_final['Ticker'].tolist())
         
         if selected_ticker:
             df_plot = found_data[selected_ticker].tail(120)
             
-            # Create subplots with secondary Y-axis
             fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-            # --- PRIMARY AXIS (RIGHT): Price & MAs ---
-            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Close'], name='Price', line=dict(color='white', width=2)), secondary_y=False)
-            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], name='MA20 (Yellow)', line=dict(color='yellow', width=1.5)), secondary_y=False)
-            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA50'], name='MA50 (Blue)', line=dict(color='royalblue', width=1.5)), secondary_y=False)
-            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA200'], name='MA200 (Trend)', line=dict(color='red', width=2, dash='dash')), secondary_y=False)
-
-            # --- SECONDARY AXIS (LEFT): Spread % ---
+            # --- SPREAD % (LEFT AXIS - LIME) ---
             fig.add_trace(go.Scatter(
                 x=df_plot.index, y=df_plot['Spread'] * 100, 
-                name='Spread % (MA20 vs MA50)', 
-                line=dict(color='lime', width=1),
-                fill='tozeroy', fillcolor='rgba(0, 255, 0, 0.1)'
+                name='Spread % (Pullback)', 
+                line=dict(color='lime', width=1.5),
+                fill='tozeroy', fillcolor='rgba(0, 255, 0, 0.05)'
             ), secondary_y=True)
 
-            # --- LAYOUT SETTINGS ---
+            # --- PRICE & MAs (RIGHT AXIS) ---
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Close'], name='Price', line=dict(color='white', width=2.5)), secondary_y=False)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], name='MA20 (Yellow)', line=dict(color='yellow', width=1.5)), secondary_y=False)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA50'], name='MA50 (Blue)', line=dict(color='royalblue', width=1.5)), secondary_y=False)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA200'], name='MA200 (Safety)', line=dict(color='#ff4b4b', width=2, dash='dot')), secondary_y=False)
+
+            # --- DARK THEME OVERRIDES ---
             fig.update_layout(
-                title=f"{selected_ticker}: Price vs Moving Average Squeeze",
+                paper_bgcolor='black', # External background
+                plot_bgcolor='black',  # Internal chart area
+                font=dict(color='white'),
+                title=f"{selected_ticker}: Price vs Squeeze",
                 template="plotly_dark",
                 xaxis_rangeslider_visible=False,
                 height=700,
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                yaxis=dict(title="Price ($)", side="right"),
+                yaxis=dict(
+                    title="Price ($)", 
+                    side="right", 
+                    gridcolor='#333333', 
+                    showgrid=True
+                ),
                 yaxis2=dict(
-                    title="Spread % (Left)", 
+                    title="Spread %", 
                     side="left", 
                     showgrid=False, 
                     zeroline=True, 
-                    zerolinecolor='gray',
+                    zerolinecolor='white', 
+                    zerolinewidth=1,
                     ticksuffix="%"
-                )
+                ),
+                xaxis=dict(gridcolor='#333333')
             )
             st.plotly_chart(fig, use_container_width=True)
     else:
