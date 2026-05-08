@@ -71,7 +71,7 @@ def run_strategy():
                 info = yf.Ticker(ticker).fast_info
                 mcap = info.get('market_cap', 0)
                 
-                if 50_000_000 <= mcap <= 500_000_000:
+                if 50_000_000 <= mcap <= 5_000_000_000:
                     turnover = (p * v).tail(20).mean()
                     sector_label = filtered_df[filtered_df[cod_col] == ticker.replace('.AX','')][sec_col].values[0]
                     
