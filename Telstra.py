@@ -4,18 +4,18 @@ import streamlit as st
 import requests
 import io
 
-st.set_page_config(page_title="ASX Multi-Sector Scanner", layout="wide")
-st.title("🚀 ASX Multi-Sector Pullback Strategy")
+st.set_page_config(page_title="ASX Master Strategy", layout="wide")
+st.title("🎯 ASX Alpha: Pullback Strategy")
+st.markdown("Scanning for high-liquidity stocks in an uptrend with a fresh pullback.")
 
 def run_strategy():
-    # 1. FETCH TICKERS & EXPAND SECTORS
+    # 1. FETCH & FILTER TICKERS
     url = "https://www.asx.com.au/asx/research/ASXListedCompanies.csv"
     try:
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
         df_asx = pd.read_csv(io.StringIO(res.text), skiprows=2)
         df_asx.columns = df_asx.columns.str.strip()
         
-        # Expanded Sector List
         target_groups = [
             'Software & Services', 
             'Technology Hardware & Equipment', 
@@ -24,7 +24,6 @@ def run_strategy():
             'Commercial & Professional Services'
         ]
         
-        # Locate columns dynamically
         sec_col = [c for c in df_asx.columns if 'industry' in c.lower()][0]
         cod_col = [c for c in df_asx.columns if 'code' in c.lower()][0]
         
@@ -34,20 +33,19 @@ def run_strategy():
         st.error(f"ASX Load Error: {e}")
         return
 
-    # --- 2. BATCH DOWNLOAD ---
-    st.info(f"Scanning {len(tickers)} companies across 5 major sectors...")
-    # Progress bar for the batch download
+    # 2. BATCH DOWNLOAD
+    st.info(f"Checking {len(tickers)} companies across target sectors...")
     data = yf.download(tickers, period="260d", interval="1d", group_by='column', progress=False)
     
     if data.empty:
-        st.error("No data returned from Yahoo.")
+        st.error("No data returned from Yahoo. Try again in a minute.")
         return
 
     close_prices = data['Close']
     volumes = data['Volume']
     final_results = []
 
-    # --- 3. PROCESSING WITH "REAL-WORLD" FILTERS ---
+    # 3. ANALYSIS LOOP
     for ticker in tickers:
         try:
             p = close_prices[ticker].dropna()
@@ -55,46 +53,49 @@ def run_strategy():
 
             if len(p) < 205: continue
 
-            # Filter 1: Liquidity Floor ($50k/day)
+            # Filter: Liquidity ($50k/day min)
             turnover = (p * v).tail(20).mean()
             if turnover < 50_000: continue
 
-            # Filter 2: Trend Safety (MA200 Flat or Rising)
+            # Filter: MA200 Slope (Long term trend)
             ma200 = p.rolling(200).mean()
-            # Slope check (current vs 5 days ago)
             slope = (ma200.iloc[-1] - ma200.iloc[-6]) / ma200.iloc[-6]
             if slope < 0: continue
 
-            # Filter 3: Pullback Logic
+            # Filter: Pullback Logic (-4% MA20/MA50 gap)
             ma20 = p.rolling(20).mean()
             ma50 = p.rolling(50).mean()
-            pullback = (ma20.iloc[-1] / ma50.iloc[-1]) - 1
+            pullback_val = (ma20.iloc[-1] / ma50.iloc[-1]) - 1
             
-            # Curl check: Is the pullback leveling off or starting to rise?
-            is_curling = (ma20.iloc[-1] / ma50.iloc[-1]) > (ma20.iloc[-2] / ma50.iloc[-2])
+            # Curl Logic: Is the signal improving compared to yesterday?
+            sig_today = (ma20.iloc[-1] / ma50.iloc[-1])
+            sig_yesterday = (ma20.iloc[-2] / ma50.iloc[-2])
 
-            # Buy Signal: -4% pullback and curling up
-            if pullback < -0.04 and is_curling:
-                # Find the sector for this ticker to display in table
+            if pullback_val < -0.04 and sig_today > sig_yesterday:
                 sector_label = filtered_df[filtered_df[cod_col] == ticker.replace('.AX','')][sec_col].values[0]
                 
                 final_results.append({
                     "Ticker": ticker,
                     "Sector": sector_label,
                     "Price": round(p.iloc[-1], 2),
-                    "Pullback": f"{round(pullback*100, 1)}%",
-                    "Turnover": f"${int(turnover/1000)}k",
-                    "Trend": "Rising" if slope > 0.001 else "Flat"
+                    "Pullback %": round(pullback_val * 100, 2),
+                    "Daily Turnover": f"${round(turnover/1000)}k",
+                    "Trend": "Rising" if slope > 0.001 else "Stable"
                 })
         except:
             continue
 
-    # --- 4. OUTPUT ---
+    # 4. RESULTS DISPLAY
     if final_results:
-        st.success(f"Strategy found {len(final_results)} matches across the expanded sectors!")
-        st.dataframe(pd.DataFrame(final_results).sort_values("Pullback"), use_container_width=True)
+        # Sort by the deepest pullback (most 'on sale')
+        df_final = pd.DataFrame(final_results).sort_values("Pullback %", ascending=True)
+        # Clean up the index display
+        df_final.index = range(1, len(df_final) + 1)
+        
+        st.success(f"Found {len(df_final)} actionable setups!")
+        st.table(df_final) # Using st.table for a cleaner look than the interactive dataframe
     else:
-        st.warning("No matches found. This suggests a broad market surge where nothing is 'on sale' or a broad decline where trends have broken.")
+        st.warning("No matches currently meet the 'Uptrend + Pullback' criteria.")
 
-if st.button('Run Master Scan'):
+if st.button('🚀 Execute Master Scan'):
     run_strategy()
