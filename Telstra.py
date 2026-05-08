@@ -17,7 +17,7 @@ st.sidebar.header("Scan Parameters")
 target_streak = st.sidebar.slider("Required Recovery Streak (Days)", 1, 5, 4, 
                                  help="How many days in a row must the Log(MA20/MA50) have improved?")
 mkt_cap_min = st.sidebar.number_input("Min Market Cap ($M)", value=50) * 1_000_000
-mkt_cap_max = st.sidebar.number_input("Max Market Cap ($M)", value=500) * 1_000_000
+mkt_cap_max = st.sidebar.number_input("Max Market Cap ($M)", value=5000) * 1_000_000
 
 # --- MEMORY INITIALIZATION ---
 if 'scan_results' not in st.session_state:
