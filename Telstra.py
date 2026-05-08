@@ -57,9 +57,7 @@ def run_strategy():
             if len(p) < 205: continue
 
             # Technical Filters FIRST (Fast)
-            ma200 = p.rolling(200).mean()
-            if p.iloc[-1] < ma200.iloc[-1]: continue # HARD FLOOR
-            
+          
             ma20 = p.rolling(20).mean()
             ma50 = p.rolling(50).mean()
             spread = (ma20 / ma50) - 1
