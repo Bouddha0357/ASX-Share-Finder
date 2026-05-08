@@ -6,9 +6,10 @@ import io
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="ASX Micro-Cap Alpha", layout="wide")
-st.title("🚀 ASX Alpha: High-Speed $50M-$500M Scanner")
+st.set_page_config(page_title="ASX Alpha Dashboard", layout="wide")
+st.title("🚀 ASX Alpha: $50M - $500M Growth Scanner")
 
+# --- MEMORY INITIALIZATION ---
 if 'scan_results' not in st.session_state:
     st.session_state.scan_results = None
 if 'found_data' not in st.session_state:
@@ -35,9 +36,9 @@ def run_strategy():
         st.error(f"ASX Load Error: {e}")
         return
 
-    # 2. FAST BATCH DOWNLOAD (Prices only)
+    # 2. FAST BATCH DOWNLOAD
     status_text = st.empty()
-    status_text.info(f"⚡ Batch downloading {len(tickers)} companies...")
+    status_text.info(f"⚡ Batch downloading price data for {len(tickers)} companies...")
     
     data = yf.download(tickers, period="260d", interval="1d", group_by='column', progress=False)
     close_prices = data['Close']
@@ -48,28 +49,30 @@ def run_strategy():
 
     # 3. ANALYSIS LOOP
     for i, ticker in enumerate(tickers):
-        if i % 20 == 0:
-            status_text.info(f"Analyzing {i}/{len(tickers)} stocks...")
+        if i % 25 == 0:
+            status_text.info(f"Filtering technicals: {i}/{len(tickers)} stocks processed...")
             
         try:
             p = close_prices[ticker].dropna()
             v = volumes[ticker].dropna()
             if len(p) < 205: continue
 
-            # Technical Filters FIRST (Fast)
-          
+            # Technical Filter 1: Hard Floor (Price > MA200)
+            ma200 = p.rolling(200).mean()
+            if p.iloc[-1] < ma200.iloc[-1]: continue 
+            
+            # Technical Filter 2: Pullback & Curl
             ma20 = p.rolling(20).mean()
             ma50 = p.rolling(50).mean()
             spread = (ma20 / ma50) - 1
             
-            # Pullback + Curl Logic
             if spread.iloc[-1] < -0.04 and spread.iloc[-1] > spread.iloc[-2]:
                 
-                # ONLY NOW do we check Market Cap (Saves 90% of time)
+                # Filter 3: Market Cap (Only for those that pass technicals)
                 info = yf.Ticker(ticker).fast_info
                 mcap = info.get('market_cap', 0)
                 
-                if 50_000_000 <= mcap <= 5_000_000_000:
+                if 50_000_000 <= mcap <= 500_000_000:
                     turnover = (p * v).tail(20).mean()
                     sector_label = filtered_df[filtered_df[cod_col] == ticker.replace('.AX','')][sec_col].values[0]
                     
@@ -79,7 +82,7 @@ def run_strategy():
                         "Price": round(p.iloc[-1], 3),
                         "Mkt Cap": f"${int(mcap/1_000_000)}M",
                         "Pullback %": round(spread.iloc[-1] * 100, 2),
-                        "Turnover": f"${int(turnover/1000)}k"
+                        "Daily Turnover": f"${int(turnover/1000)}k"
                     })
                     temp_found_data[ticker] = pd.DataFrame({
                         'Close': p, 'MA20': ma20, 'MA50': ma50, 'MA200': ma200, 'Spread': spread
@@ -90,8 +93,53 @@ def run_strategy():
     st.session_state.scan_results = pd.DataFrame(final_results) if final_results else None
     st.session_state.found_data = temp_found_data
 
-# --- APP LAYOUT ---
+# --- UI LAYOUT ---
 if st.button('🚀 Execute Alpha Scan'):
     run_strategy()
 
-# (Include the same Table and Charting logic here as before)
+# 4. RESULTS TABLE
+if st.session_state.scan_results is not None:
+    df_final = st.session_state.scan_results.sort_values("Pullback %")
+    st.success(f"Found {len(df_final)} setups in the $50M-$500M range!")
+    st.dataframe(df_final, use_container_width=True)
+
+    # 5. CHARTING LOGIC
+    st.divider()
+    st.subheader("📊 Deep Dark Technical Analysis")
+    selected_ticker = st.selectbox("Select a Ticker to view Chart", df_final['Ticker'].tolist())
+    
+    if selected_ticker and selected_ticker in st.session_state.found_data:
+        df_plot = st.session_state.found_data[selected_ticker].tail(120)
+        
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        
+        # SPREAD % (LEFT AXIS - LIME)
+        fig.add_trace(go.Scatter(
+            x=df_plot.index, y=df_plot['Spread'] * 100, 
+            name='Spread % (Pullback)', 
+            line=dict(color='lime', width=1.5),
+            fill='tozeroy', fillcolor='rgba(0, 255, 0, 0.05)'
+        ), secondary_y=True)
+
+        # PRICE & MAs (RIGHT AXIS)
+        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Close'], name='Price', line=dict(color='white', width=2.5)), secondary_y=False)
+        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], name='MA20 (Yellow)', line=dict(color='yellow', width=1.5)), secondary_y=False)
+        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA50'], name='MA50 (Blue)', line=dict(color='royalblue', width=1.5)), secondary_y=False)
+        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA200'], name='MA200 (Safety)', line=dict(color='#ff4b4b', width=2, dash='dot')), secondary_y=False)
+
+        # THEME SETTINGS
+        fig.update_layout(
+            paper_bgcolor='black', plot_bgcolor='black', font=dict(color='white'),
+            xaxis_rangeslider_visible=False, height=700,
+            title=dict(text=f"{selected_ticker}: Price vs Squeeze", font=dict(color='white')),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color="white")),
+            yaxis=dict(title="Price ($)", side="right", gridcolor='#333333', tickfont=dict(color="white")),
+            yaxis2=dict(
+                title="Spread % (Pullback)", side="left", showgrid=False, 
+                zeroline=True, zerolinecolor='white', ticksuffix="%", tickfont=dict(color="white")
+            ),
+            xaxis=dict(gridcolor='#333333', tickfont=dict(color="white"))
+        )
+        st.plotly_chart(fig, use_container_width=True)
+elif st.session_state.scan_results is None and 'scan_results' in st.session_state:
+    st.warning("No Micro-Cap stocks currently meet the Uptrend + Pullback criteria.")
