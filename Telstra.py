@@ -62,7 +62,6 @@ def run_strategy():
             if slope < 0: continue
 
             pullback_val = spread.iloc[-1]
-            # Curl Logic
             is_curling = spread.iloc[-1] > spread.iloc[-2]
 
             if pullback_val < -0.04 and is_curling:
@@ -112,36 +111,48 @@ def run_strategy():
             fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA50'], name='MA50 (Blue)', line=dict(color='royalblue', width=1.5)), secondary_y=False)
             fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA200'], name='MA200 (Safety)', line=dict(color='#ff4b4b', width=2, dash='dot')), secondary_y=False)
 
-            # --- DARK THEME OVERRIDES ---
+            # --- DARK THEME & WHITE TEXT OVERRIDES ---
             fig.update_layout(
-                paper_bgcolor='black', # External background
-                plot_bgcolor='black',  # Internal chart area
-                font=dict(color='white'),
-                title=f"{selected_ticker}: Price vs Squeeze",
+                paper_bgcolor='black', 
+                plot_bgcolor='black',  
+                font=dict(color='white'), # Global font color
+                title=dict(text=f"{selected_ticker}: Price vs Squeeze", font=dict(color='white')),
                 template="plotly_dark",
                 xaxis_rangeslider_visible=False,
                 height=700,
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                legend=dict(
+                    orientation="h", 
+                    yanchor="bottom", 
+                    y=1.02, 
+                    xanchor="right", 
+                    x=1,
+                    font=dict(color="white") # Force legend text to white
+                ),
                 yaxis=dict(
-                    title="Price ($)", 
+                    title=dict(text="Price ($)", font=dict(color="white")), 
                     side="right", 
                     gridcolor='#333333', 
-                    showgrid=True
+                    showgrid=True,
+                    tickfont=dict(color="white")
                 ),
                 yaxis2=dict(
-                    title="Spread %", 
+                    title=dict(text="Spread %", font=dict(color="white")), 
                     side="left", 
                     showgrid=False, 
                     zeroline=True, 
                     zerolinecolor='white', 
                     zerolinewidth=1,
-                    ticksuffix="%"
+                    ticksuffix="%",
+                    tickfont=dict(color="white")
                 ),
-                xaxis=dict(gridcolor='#333333')
+                xaxis=dict(
+                    gridcolor='#333333',
+                    tickfont=dict(color="white")
+                )
             )
             st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning("No matches currently meet the criteria.")
 
-if st.button('🚀 Run Master Scan'):
+if st.button('🚀 Execute Master Scan'):
     run_strategy()
