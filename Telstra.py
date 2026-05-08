@@ -48,23 +48,21 @@ def run_strategy():
     temp_found_data = {}
 
     for i, ticker in enumerate(tickers):
-        if i % 25 == 0:
-            status_text.info(f"Analyzing Recovery: {i}/{len(tickers)}...")
-            
         try:
             p = close_prices[ticker].dropna()
-            v = volumes[ticker].dropna()
-            if len(p) < 60: continue # Minimum data for MA50
+            if len(p) < 60: continue
 
-            # 2. Log-Spread Calculation
             ma20 = p.rolling(20).mean()
             ma50 = p.rolling(50).mean()
             log_spread = np.log(ma20 / ma50)
             
-            # 3. CRITERIA: 4-Day Positive Streak in the Log-Spread
-            # Current value must be rising relative to the previous day for 4 days
+            # Use the slider value for the streak
             diff = log_spread.diff() 
-            recent_diffs = diff.tail(4)
+            recent_diffs = diff.tail(streak) # <--- SENSITIVITY ADJUSTMENT
+            
+            # LOGIC: Is it rising for 'X' days?
+            if (recent_diffs > 0).all():
+        
             
             # Condition: Narrowing the gap (recovering) for 4 straight days
             # We keep the condition that it must still be a 'pullback' (log_spread < 0)
