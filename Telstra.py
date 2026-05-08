@@ -7,15 +7,17 @@ import io
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="ASX Log-Momentum Alpha", layout="wide")
-st.title("🚀 ASX Alpha: Log-Momentum $50M-$500M")
+st.set_page_config(page_title="ASX Log-Recovery Alpha", layout="wide")
+st.title("🚀 ASX Alpha: Log-Recovery $50M-$500M")
 
+# --- MEMORY ---
 if 'scan_results' not in st.session_state:
     st.session_state.scan_results = None
 if 'found_data' not in st.session_state:
     st.session_state.found_data = {}
 
 def run_strategy():
+    # 1. FETCH TICKERS
     url = "https://www.asx.com.au/asx/research/ASXListedCompanies.csv"
     try:
         res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
@@ -47,25 +49,33 @@ def run_strategy():
 
     for i, ticker in enumerate(tickers):
         if i % 25 == 0:
-            status_text.info(f"Analyzing Log-Momentum: {i}/{len(tickers)}...")
+            status_text.info(f"Analyzing Log-Recovery: {i}/{len(tickers)}...")
             
         try:
             p = close_prices[ticker].dropna()
             v = volumes[ticker].dropna()
             if len(p) < 250: continue
 
+            # 1. Trend Safety (Price > MA200)
+            ma200 = p.rolling(200).mean()
+            if p.iloc[-1] < ma200.iloc[-1]: continue 
+
             # 2. Log-Spread Calculation
             ma20 = p.rolling(20).mean()
             ma50 = p.rolling(50).mean()
-            # Log(MA20 / MA50)
             log_spread = np.log(ma20 / ma50)
             
-            # 3. CRITERIA: Log Spread must be POSITIVE for 4 consecutive days
-            # We look at the last 4 values
-            recent_log = log_spread.tail(4)
+            # 3. CRITERIA: Still in Pullback, but Log-Spread has IMPROVED for 4 days
+            # Pullback = log_spread is negative
+            # Improved = current value > previous value
             
-            if (recent_log > 0).all():
-                # 4. Market Cap Filter
+            diff = log_spread.diff() # Daily change in the log gap
+            recent_diffs = diff.tail(4)
+            
+            # Condition: Current Log Spread is negative (Pullback) 
+            # AND the last 4 days of 'diff' are positive (Recovering)
+            if log_spread.iloc[-1] < 0 and (recent_diffs > 0).all():
+                
                 info = yf.Ticker(ticker).fast_info
                 mcap = info.get('market_cap', 0)
                 
@@ -78,7 +88,8 @@ def run_strategy():
                         "Sector": sector_label,
                         "Price": round(p.iloc[-1], 3),
                         "Mkt Cap": f"${int(mcap/1_000_000)}M",
-                        "Log Spread": round(log_spread.iloc[-1], 4),
+                        "Log Gap": round(log_spread.iloc[-1], 4),
+                        "4D Recovery": "Yes",
                         "Turnover": f"${int(turnover/1000)}k"
                     })
                     temp_found_data[ticker] = pd.DataFrame({
@@ -91,23 +102,23 @@ def run_strategy():
     st.session_state.found_data = temp_found_data
 
 # --- UI LAYOUT ---
-if st.button('🚀 Execute Log-Alpha Scan'):
+if st.button('🚀 Execute Log-Recovery Scan'):
     run_strategy()
 
 if st.session_state.scan_results is not None:
-    df_final = st.session_state.scan_results.sort_values("Log Spread", ascending=False)
-    st.success(f"Found {len(df_final)} stocks with 4+ days of positive Log-Momentum!")
+    df_final = st.session_state.scan_results.sort_values("Log Gap")
+    st.success(f"Found {len(df_final)} setups with 4 days of narrowing Log-Spread!")
     st.dataframe(df_final, use_container_width=True)
 
     st.divider()
-    st.subheader("📊 Log-Momentum Visualization")
+    st.subheader("📊 Recovery Visualization")
     selected_ticker = st.selectbox("Select Ticker", df_final['Ticker'].tolist())
     
     if selected_ticker and selected_ticker in st.session_state.found_data:
         df_plot = st.session_state.found_data[selected_ticker].tail(120)
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         
-        # LOG SPREAD (LEFT AXIS - LIME)
+        # LOG SPREAD (LEFT AXIS)
         fig.add_trace(go.Scatter(
             x=df_plot.index, y=df_plot['LogSpread'], 
             name='Log(MA20/MA50)', line=dict(color='lime', width=1.5),
@@ -125,7 +136,7 @@ if st.session_state.scan_results is not None:
             xaxis_rangeslider_visible=False, height=700,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color="white")),
             yaxis=dict(title="Price ($)", side="right", gridcolor='#333333', tickfont=dict(color="white")),
-            yaxis2=dict(title="Log Spread", side="left", showgrid=False, zeroline=True, zerolinecolor='white'),
+            yaxis2=dict(title="Log Gap", side="left", showgrid=False, zeroline=True, zerolinecolor='white'),
             xaxis=dict(gridcolor='#333333', tickfont=dict(color="white"))
         )
         st.plotly_chart(fig, use_container_width=True)
