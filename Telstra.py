@@ -7,38 +7,38 @@ import time
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="ASX Tech Picker", layout="wide")
-st.title("🚀 ASX 'Blind' Tech Pullback Finder")
+st.title("🚀 ASX Tech Pullback Finder (Simplified)")
 
 def get_asx_tech_signals():
-    # 1. Download official ASX list with Error Handling
+    # 1. Robust ASX List Download
     url = "https://www.asx.com.au/asx/research/ASXListedCompanies.csv"
     headers = {'User-Agent': 'Mozilla/5.0'}
     
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        # The ASX CSV usually has 1-3 rows of junk at the top. 
-        # We use 'header=0' and skip the first few lines to find the actual columns.
-        df_asx = pd.read_csv(io.StringIO(response.text), skiprows=2)
+        response = requests.get(url, headers=headers, timeout=15)
+        # We try to read the CSV and find where the headers start
+        data_content = response.text
+        df_asx = pd.read_csv(io.StringIO(data_content), skiprows=2)
         
-        # Clean column names (remove whitespace)
+        # Cleanup column names
         df_asx.columns = df_asx.columns.str.strip()
         
-        # Find the right columns even if names vary slightly
+        # Locate the columns dynamically by keyword
         sector_col = [c for c in df_asx.columns if 'industry' in c.lower()][0]
         code_col = [c for c in df_asx.columns if 'code' in c.lower()][0]
 
-        # Filter for Information Technology
+        # Filter for Tech
         tech_df = df_asx[df_asx[sector_col].str.contains('Information Technology', na=False, case=False)]
         tickers = [f"{code}.AX" for code in tech_df[code_col]]
     except Exception as e:
-        st.error(f"Error loading ASX Directory: {e}")
+        st.error(f"Failed to find tickers: {e}")
         return pd.DataFrame()
 
-    st.write(f"Scanning {len(tickers)} Tech companies...")
+    st.info(f"Scanning {len(tickers)} Tech tickers for Pullback signals...")
     progress_bar = st.progress(0)
     final_results = []
 
-    # Create a session to help avoid 429 Rate Limits
+    # Use a session to prevent Yahoo from blocking the Streamlit IP
     session = requests.Session()
     session.headers.update({'User-Agent': 'Mozilla/5.0'})
 
@@ -46,59 +46,61 @@ def get_asx_tech_signals():
         progress_bar.progress((i + 1) / len(tickers))
         try:
             stock = yf.Ticker(ticker, session=session)
+            # Use fast_info for speed
             fast = stock.fast_info
             
-            # Market Cap Filter ($50M - $500M)
+            # 1. Market Cap Filter ($50M - $500M)
             mkt_cap = fast.get('market_cap', 0)
             if not (50_000_000 <= mkt_cap <= 500_000_000): continue
 
-            # Get Data
-            hist = stock.history(period="250d")
-            if len(hist) < 210: continue
+            # 2. Get 100 days of history (much faster than 250d)
+            hist = stock.history(period="100d")
+            if len(hist) < 55: continue
 
-            # Volume Value Check (> $200k)
+            # 3. Volume Value Check (> $200k)
             avg_val = (hist['Close'] * hist['Volume']).tail(20).mean()
             if avg_val < 200_000: continue
 
-            # Technicals
+            # 4. Calculate Moving Averages
             hist['MA20'] = hist['Close'].rolling(window=20).mean()
             hist['MA50'] = hist['Close'].rolling(window=50).mean()
-            hist['MA200'] = hist['Close'].rolling(window=200).mean()
             hist['Signal'] = (hist['MA20'] / hist['MA50']) - 1
             
-            # Slope of MA200 (Last 5 days)
-            slope = ((hist['MA200'].iloc[-1] - hist['MA200'].iloc[-6]) / hist['MA200'].iloc[-6]) * 100
+            # 5. Core Logic: -8% Pullback + 4-day recovery
+            recent_signals = hist['Signal'].tail(5)
+            
+            # Current signal is deeply negative
+            is_deep_pullback = recent_signals.iloc[-1] < -0.08
+            # The signal has been rising for the last 4 days
+            is_curling_up = all(recent_signals.diff().dropna() > 0)
 
-            # STRATEGY CHECK
-            recent = hist['Signal'].tail(5)
-            # Pullback < -8%, 4-day growth, MA200 not falling
-            if recent.iloc[-1] < -0.08 and all(recent.diff().dropna() > 0) and slope >= 0:
+            if is_deep_pullback and is_curling_up:
                 final_results.append({
                     'Ticker': ticker,
                     'Price': round(hist['Close'].iloc[-1], 3),
-                    'Pullback %': f"{round(recent.iloc[-1] * 100, 2)}%",
-                    'Trend Slope': round(slope, 4),
-                    'Mkt Cap': f"${round(mkt_cap/1e6)}M"
+                    'Pullback %': f"{round(recent_signals.iloc[-1] * 100, 2)}%",
+                    'Mkt Cap': f"${round(mkt_cap/1e6)}M",
+                    'Avg Daily $': f"${round(avg_val/1000)}k"
                 })
             
-            # Small sleep to prevent Yahoo blocking you
+            # Safety delay
             time.sleep(0.1)
+            
         except:
             continue
 
-    # Return results as a DataFrame
     if not final_results:
         return pd.DataFrame()
     
-    return pd.DataFrame(final_results).sort_values(by='Trend Slope', ascending=False)
+    return pd.DataFrame(final_results)
 
-# --- MAIN EXECUTION ---
-if st.button('Run Market Scan'):
-    with st.spinner('Analyzing ASX Technology Sector...'):
-        df_final = get_asx_tech_signals()
+# --- EXECUTION ---
+if st.button('Start Tech Scan'):
+    with st.spinner('Calculating signals...'):
+        df = get_asx_tech_signals()
         
-        if df_final.empty:
-            st.warning("No stocks met your strict criteria today. Try again tomorrow!")
+        if df.empty:
+            st.warning("No Tech stocks match the criteria right now.")
         else:
-            st.success(f"Found {len(df_final)} potential entries!")
-            st.dataframe(df_final, use_container_width=True)
+            st.success(f"Found {len(df)} matches!")
+            st.dataframe(df, use_container_width=True)
