@@ -5,95 +5,118 @@ import requests
 import io
 import time
 
-st.set_page_config(page_title="ASX Live Screener", layout="wide")
-st.title("🕵️‍♂️ Live ASX Tech Funnel")
+st.set_page_config(page_title="ASX Tech Funnel", layout="wide")
+st.title("🕵️‍♂️ ASX Tech Strategy: Pullback + Trend")
 
 def run_live_scan():
-    # --- 1. INITIAL SCRAPE ---
+    # --- 1. DOWNLOAD & TARGET TECH SECTORS ---
     url = "https://www.asx.com.au/asx/research/ASXListedCompanies.csv"
     try:
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers, timeout=15)
+        # ASX CSV usually needs to skip 2-3 rows to find the header
         df_asx = pd.read_csv(io.StringIO(res.text), skiprows=2)
         df_asx.columns = df_asx.columns.str.strip()
-        
-        # Sector/Code column detection
+
+        # Define the exact Tech groups from your list
+        tech_keywords = [
+            'Software & Services', 
+            'Technology Hardware & Equipment', 
+            'Semiconductors & Semiconductor Equipment'
+        ]
+
+        # Find columns dynamically
         sec_col = [c for c in df_asx.columns if 'industry' in c.lower()][0]
         cod_col = [c for c in df_asx.columns if 'code' in c.lower()][0]
         
-        # Initial Filter: TECH ONLY
-        tech_df = df_asx[df_asx[sec_col].str.contains('Information Technology', na=False, case=False)]
+        # Filter for our 3 specific tech groups
+        tech_df = df_asx[df_asx[sec_col].isin(tech_keywords)]
         tickers = [f"{c}.AX" for c in tech_df[cod_col]]
     except Exception as e:
-        st.error(f"Scrape failed: {e}")
+        st.error(f"Failed to load ASX Directory: {e}")
         return
 
-    # --- 2. LIVE DASHBOARD SETUP ---
-    col1, col2, col3, col4 = st.columns(4)
-    stat_total = col1.metric("Tech Universe", len(tickers))
-    stat_cap = col2.metric("Passed Cap", "0")
-    stat_vol = col3.metric("Passed Vol", "0")
-    stat_signal = col4.metric("BUY SIGNALS", "0")
+    # --- 2. DASHBOARD SETUP ---
+    m1, m2, m3, m4 = st.columns(4)
+    stat_total = m1.metric("Tech Universe", len(tickers))
+    stat_cap = m2.metric("Passed Cap ($50M-$500M)", "0")
+    stat_vol = m3.metric("Passed Vol (>$200k)", "0")
+    stat_signal = m4.metric("BUY SIGNALS", "0")
 
-    st.subheader("Live Processing Feed")
-    # This 'placeholder' is the secret—it lets us rewrite the table in real-time
     table_placeholder = st.empty()
     log_placeholder = st.empty()
     
     results = []
     counts = {"cap": 0, "vol": 0, "signal": 0}
-    
     session = requests.Session()
-    session.headers.update({'User-Agent': 'Mozilla/5.0'})
 
-    # --- 3. THE LOOP ---
+    # --- 3. THE FUNNEL ---
     for i, ticker in enumerate(tickers):
-        log_placeholder.text(f"Checking {ticker} ({i+1}/{len(tickers)})...")
+        log_placeholder.text(f"Analyzing {ticker}...")
         
         try:
             stock = yf.Ticker(ticker, session=session)
-            fast = stock.fast_info
+            info = stock.fast_info
             
-            # Market Cap Check
-            mcap = fast.get('market_cap', 0)
+            # STAGE 1: Market Cap Filter
+            mcap = info.get('market_cap', 0)
             if 50_000_000 <= mcap <= 500_000_000:
                 counts["cap"] += 1
-                stat_cap.metric("Passed Cap", counts["cap"])
+                stat_cap.metric("Passed Cap ($50M-$500M)", counts["cap"])
                 
-                # Volume Check
-                hist = stock.history(period="60d")
-                if len(hist) < 50: continue
+                # STAGE 2: Data & Volume Filter
+                # We need 205+ days for a 200MA and a 5-day slope check
+                hist = stock.history(period="250d")
+                if len(hist) < 205: continue
                 
                 avg_val = (hist['Close'] * hist['Volume']).tail(20).mean()
                 if avg_val >= 200_000:
                     counts["vol"] += 1
-                    stat_vol.metric("Passed Vol", counts["vol"])
+                    stat_vol.metric("Passed Vol (>$200k)", counts["vol"])
                     
-                    # MA Logic Check
+                    # STAGE 3: Technical Analysis (MA20/50 Pullback + MA200 Slope)
                     hist['MA20'] = hist['Close'].rolling(window=20).mean()
                     hist['MA50'] = hist['Close'].rolling(window=50).mean()
-                    hist['Signal'] = (hist['MA20'] / hist['MA50']) - 1
+                    hist['MA200'] = hist['Close'].rolling(window=200).mean()
                     
-                    recent = hist['Signal'].tail(5)
-                    if recent.iloc[-1] < -0.08 and all(recent.diff().dropna() > 0):
+                    # Core Signal logic
+                    hist['Signal'] = (hist['MA20'] / hist['MA50']) - 1
+                    recent_signals = hist['Signal'].tail(5)
+                    
+                    # Trend Slope logic (Positive progression over last 5 days)
+                    ma200_now = hist['MA200'].iloc[-1]
+                    ma200_prev = hist['MA200'].iloc[-6]
+                    slope = ((ma200_now - ma200_prev) / ma200_prev) * 100
+
+                    # FINAL CRITERIA CHECK
+                    # 1. Pullback below -8%
+                    # 2. 4 days of signal growth
+                    # 3. MA200 is flat or positive (Slope >= 0)
+                    if recent_signals.iloc[-1] < -0.08 and \
+                       all(recent_signals.diff().dropna() > 0) and \
+                       slope >= 0:
+                        
                         counts["signal"] += 1
                         stat_signal.metric("BUY SIGNALS", counts["signal"])
                         
-                        # Add to our live list
                         results.append({
                             "Ticker": ticker,
                             "Price": round(hist['Close'].iloc[-1], 3),
-                            "Pullback %": f"{round(recent.iloc[-1]*100, 1)}%",
+                            "Pullback %": f"{round(recent_signals.iloc[-1]*100, 1)}%",
+                            "MA200 Slope": round(slope, 4),
                             "Mkt Cap": f"${int(mcap/1e6)}M"
                         })
                         
-                        # UPDATE THE TABLE IMMEDIATELY
-                        table_placeholder.dataframe(pd.DataFrame(results), use_container_width=True)
+                        # Display results immediately and sort by best trend slope
+                        df_display = pd.DataFrame(results).sort_values(by='MA200 Slope', ascending=False)
+                        table_placeholder.dataframe(df_display, use_container_width=True)
 
-            time.sleep(0.05) # Keep it smooth
-        except:
+            # Small delay to avoid API blocking
+            time.sleep(0.05)
+        except Exception:
             continue
 
-    log_placeholder.success("✅ Scan Complete!")
+    log_placeholder.success(f"Finished! Checked {len(tickers)} Tech companies.")
 
-if st.button('🚀 Start Real-Time Funnel Scan'):
+if st.button('🚀 Run Strategy Scan'):
     run_live_scan()
