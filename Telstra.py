@@ -54,10 +54,6 @@ def run_strategy():
             v = volumes[ticker].dropna()
             if len(p) < 250: continue
 
-            # 1. Trend Safety (Hard Floor)
-            ma200 = p.rolling(200).mean()
-            if p.iloc[-1] < ma200.iloc[-1]: continue 
-
             # 2. Log-Spread Calculation
             ma20 = p.rolling(20).mean()
             ma50 = p.rolling(50).mean()
