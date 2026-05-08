@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="ASX Log-Recovery Alpha", layout="wide")
-st.title("🚀 ASX Alpha: Log-Recovery $50M-$500M")
+st.title("🚀 ASX Alpha: High-Vol Recovery Scanner")
 
 # --- MEMORY ---
 if 'scan_results' not in st.session_state:
@@ -49,33 +49,28 @@ def run_strategy():
 
     for i, ticker in enumerate(tickers):
         if i % 25 == 0:
-            status_text.info(f"Analyzing Log-Recovery: {i}/{len(tickers)}...")
+            status_text.info(f"Analyzing Recovery: {i}/{len(tickers)}...")
             
         try:
             p = close_prices[ticker].dropna()
             v = volumes[ticker].dropna()
-            if len(p) < 250: continue
-
-            # 1. Trend Safety (Price > MA200)
-            ma200 = p.rolling(200).mean()
-            if p.iloc[-1] < ma200.iloc[-1]: continue 
+            if len(p) < 60: continue # Minimum data for MA50
 
             # 2. Log-Spread Calculation
             ma20 = p.rolling(20).mean()
             ma50 = p.rolling(50).mean()
             log_spread = np.log(ma20 / ma50)
             
-            # 3. CRITERIA: Still in Pullback, but Log-Spread has IMPROVED for 4 days
-            # Pullback = log_spread is negative
-            # Improved = current value > previous value
-            
-            diff = log_spread.diff() # Daily change in the log gap
+            # 3. CRITERIA: 4-Day Positive Streak in the Log-Spread
+            # Current value must be rising relative to the previous day for 4 days
+            diff = log_spread.diff() 
             recent_diffs = diff.tail(4)
             
-            # Condition: Current Log Spread is negative (Pullback) 
-            # AND the last 4 days of 'diff' are positive (Recovering)
+            # Condition: Narrowing the gap (recovering) for 4 straight days
+            # We keep the condition that it must still be a 'pullback' (log_spread < 0)
             if log_spread.iloc[-1] < 0 and (recent_diffs > 0).all():
                 
+                # 4. Market Cap Filter ($50M - $500M)
                 info = yf.Ticker(ticker).fast_info
                 mcap = info.get('market_cap', 0)
                 
@@ -83,13 +78,15 @@ def run_strategy():
                     turnover = (p * v).tail(20).mean()
                     sector_label = filtered_df[filtered_df[cod_col] == ticker.replace('.AX','')][sec_col].values[0]
                     
+                    # We still calculate MA200 just for the chart, but don't filter by it
+                    ma200 = p.rolling(200).mean()
+                    
                     final_results.append({
                         "Ticker": ticker,
                         "Sector": sector_label,
                         "Price": round(p.iloc[-1], 3),
                         "Mkt Cap": f"${int(mcap/1_000_000)}M",
                         "Log Gap": round(log_spread.iloc[-1], 4),
-                        "4D Recovery": "Yes",
                         "Turnover": f"${int(turnover/1000)}k"
                     })
                     temp_found_data[ticker] = pd.DataFrame({
@@ -101,42 +98,39 @@ def run_strategy():
     st.session_state.scan_results = pd.DataFrame(final_results) if final_results else None
     st.session_state.found_data = temp_found_data
 
-# --- UI LAYOUT ---
-if st.button('🚀 Execute Log-Recovery Scan'):
+# --- UI ---
+if st.button('🚀 Execute Unlimited Recovery Scan'):
     run_strategy()
 
 if st.session_state.scan_results is not None:
     df_final = st.session_state.scan_results.sort_values("Log Gap")
-    st.success(f"Found {len(df_final)} setups with 4 days of narrowing Log-Spread!")
+    st.success(f"Found {len(df_final)} setups with 4 days of positive log-momentum!")
     st.dataframe(df_final, use_container_width=True)
 
     st.divider()
-    st.subheader("📊 Recovery Visualization")
     selected_ticker = st.selectbox("Select Ticker", df_final['Ticker'].tolist())
     
     if selected_ticker and selected_ticker in st.session_state.found_data:
         df_plot = st.session_state.found_data[selected_ticker].tail(120)
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         
-        # LOG SPREAD (LEFT AXIS)
-        fig.add_trace(go.Scatter(
-            x=df_plot.index, y=df_plot['LogSpread'], 
-            name='Log(MA20/MA50)', line=dict(color='lime', width=1.5),
-            fill='tozeroy', fillcolor='rgba(0, 255, 0, 0.1)'
-        ), secondary_y=True)
+        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['LogSpread'], name='Log Gap', 
+                                 line=dict(color='lime', width=1.5), fill='tozeroy', 
+                                 fillcolor='rgba(0, 255, 0, 0.1)'), secondary_y=True)
 
-        # PRICE & MAs (RIGHT AXIS)
         fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Close'], name='Price', line=dict(color='white', width=2)), secondary_y=False)
         fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], name='MA20', line=dict(color='yellow', width=1.5)), secondary_y=False)
         fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA50'], name='MA50', line=dict(color='royalblue', width=1.5)), secondary_y=False)
+        
+        # We keep the MA200 line on the chart so you can see where it is, even if we don't filter
         fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA200'], name='MA200', line=dict(color='#ff4b4b', width=2, dash='dot')), secondary_y=False)
 
         fig.update_layout(
             paper_bgcolor='black', plot_bgcolor='black', font=dict(color='white'),
             xaxis_rangeslider_visible=False, height=700,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color="white")),
-            yaxis=dict(title="Price ($)", side="right", gridcolor='#333333', tickfont=dict(color="white")),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            yaxis=dict(title="Price ($)", side="right", gridcolor='#333333'),
             yaxis2=dict(title="Log Gap", side="left", showgrid=False, zeroline=True, zerolinecolor='white'),
-            xaxis=dict(gridcolor='#333333', tickfont=dict(color="white"))
+            xaxis=dict(gridcolor='#333333')
         )
         st.plotly_chart(fig, use_container_width=True)
