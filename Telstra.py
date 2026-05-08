@@ -3,10 +3,11 @@ import yfinance as yf
 import streamlit as st
 import requests
 import io
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="ASX Master Strategy", layout="wide")
-st.title("🎯 ASX Alpha: Pullback Strategy")
-st.markdown("Scanning for high-liquidity stocks in an uptrend with a fresh pullback.")
+st.set_page_config(page_title="ASX Alpha Dashboard", layout="wide")
+st.title("🎯 ASX Alpha: Professional Visualization")
 
 def run_strategy():
     # 1. FETCH & FILTER TICKERS
@@ -17,10 +18,8 @@ def run_strategy():
         df_asx.columns = df_asx.columns.str.strip()
         
         target_groups = [
-            'Software & Services', 
-            'Technology Hardware & Equipment', 
-            'Semiconductors & Semiconductor Equipment',
-            'Capital Goods',
+            'Software & Services', 'Technology Hardware & Equipment', 
+            'Semiconductors & Semiconductor Equipment', 'Capital Goods',
             'Commercial & Professional Services'
         ]
         
@@ -34,44 +33,38 @@ def run_strategy():
         return
 
     # 2. BATCH DOWNLOAD
-    st.info(f"Checking {len(tickers)} companies across target sectors...")
+    st.info(f"Scanning {len(tickers)} companies...")
     data = yf.download(tickers, period="260d", interval="1d", group_by='column', progress=False)
     
-    if data.empty:
-        st.error("No data returned from Yahoo. Try again in a minute.")
-        return
-
     close_prices = data['Close']
     volumes = data['Volume']
     final_results = []
+    found_data = {}
 
     # 3. ANALYSIS LOOP
     for ticker in tickers:
         try:
             p = close_prices[ticker].dropna()
             v = volumes[ticker].dropna()
-
             if len(p) < 205: continue
 
-            # Filter: Liquidity ($50k/day min)
             turnover = (p * v).tail(20).mean()
             if turnover < 50_000: continue
 
-            # Filter: MA200 Slope (Long term trend)
+            ma20 = p.rolling(20).mean()
+            ma50 = p.rolling(50).mean()
             ma200 = p.rolling(200).mean()
+            
+            # Spread Calculation
+            spread = (ma20 / ma50) - 1
+            
             slope = (ma200.iloc[-1] - ma200.iloc[-6]) / ma200.iloc[-6]
             if slope < 0: continue
 
-            # Filter: Pullback Logic (-4% MA20/MA50 gap)
-            ma20 = p.rolling(20).mean()
-            ma50 = p.rolling(50).mean()
-            pullback_val = (ma20.iloc[-1] / ma50.iloc[-1]) - 1
-            
-            # Curl Logic: Is the signal improving compared to yesterday?
-            sig_today = (ma20.iloc[-1] / ma50.iloc[-1])
-            sig_yesterday = (ma20.iloc[-2] / ma50.iloc[-2])
+            pullback_val = spread.iloc[-1]
+            is_curling = spread.iloc[-1] > spread.iloc[-2]
 
-            if pullback_val < -0.04 and sig_today > sig_yesterday:
+            if pullback_val < -0.04 and is_curling:
                 sector_label = filtered_df[filtered_df[cod_col] == ticker.replace('.AX','')][sec_col].values[0]
                 
                 final_results.append({
@@ -82,20 +75,64 @@ def run_strategy():
                     "Daily Turnover": f"${round(turnover/1000)}k",
                     "Trend": "Rising" if slope > 0.001 else "Stable"
                 })
+                # Store for plotting
+                found_data[ticker] = pd.DataFrame({
+                    'Close': p, 'MA20': ma20, 'MA50': ma50, 
+                    'MA200': ma200, 'Spread': spread
+                })
         except:
             continue
 
-    # 4. RESULTS DISPLAY
+    # 4. RESULTS & ADVANCED CHARTING
     if final_results:
-        # Sort by the deepest pullback (most 'on sale')
-        df_final = pd.DataFrame(final_results).sort_values("Pullback %", ascending=True)
-        # Clean up the index display
-        df_final.index = range(1, len(df_final) + 1)
-        
-        st.success(f"Found {len(df_final)} actionable setups!")
-        st.table(df_final) # Using st.table for a cleaner look than the interactive dataframe
-    else:
-        st.warning("No matches currently meet the 'Uptrend + Pullback' criteria.")
+        df_final = pd.DataFrame(final_results).sort_values("Pullback %")
+        st.success(f"Found {len(df_final)} setups!")
+        st.dataframe(df_final, use_container_width=True)
 
-if st.button('🚀 Execute Master Scan'):
+        st.divider()
+        st.subheader("📊 Multi-Axis Technical View")
+        selected_ticker = st.selectbox("Select Ticker", df_final['Ticker'].tolist())
+        
+        if selected_ticker:
+            df_plot = found_data[selected_ticker].tail(120)
+            
+            # Create subplots with secondary Y-axis
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+            # --- PRIMARY AXIS (RIGHT): Price & MAs ---
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Close'], name='Price', line=dict(color='white', width=2)), secondary_y=False)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], name='MA20 (Yellow)', line=dict(color='yellow', width=1.5)), secondary_y=False)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA50'], name='MA50 (Blue)', line=dict(color='royalblue', width=1.5)), secondary_y=False)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA200'], name='MA200 (Trend)', line=dict(color='red', width=2, dash='dash')), secondary_y=False)
+
+            # --- SECONDARY AXIS (LEFT): Spread % ---
+            fig.add_trace(go.Scatter(
+                x=df_plot.index, y=df_plot['Spread'] * 100, 
+                name='Spread % (MA20 vs MA50)', 
+                line=dict(color='lime', width=1),
+                fill='tozeroy', fillcolor='rgba(0, 255, 0, 0.1)'
+            ), secondary_y=True)
+
+            # --- LAYOUT SETTINGS ---
+            fig.update_layout(
+                title=f"{selected_ticker}: Price vs Moving Average Squeeze",
+                template="plotly_dark",
+                xaxis_rangeslider_visible=False,
+                height=700,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                yaxis=dict(title="Price ($)", side="right"),
+                yaxis2=dict(
+                    title="Spread % (Left)", 
+                    side="left", 
+                    showgrid=False, 
+                    zeroline=True, 
+                    zerolinecolor='gray',
+                    ticksuffix="%"
+                )
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("No matches currently meet the criteria.")
+
+if st.button('🚀 Run Master Scan'):
     run_strategy()
