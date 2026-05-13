@@ -5,148 +5,73 @@ import streamlit as st
 import requests
 import io
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
-# --- APP CONFIG ---
-st.set_page_config(page_title="ASX Log-Recovery Alpha", layout="wide")
-st.title("🚀 ASX Alpha: High-Vol Log Recovery")
-st.markdown("Scanning for $50M - $500M companies where the short-term trend is curling back toward the medium-term trend.")
+st.set_page_config(page_title="ASX Alpha Diagnostic", layout="wide")
+st.title("🔍 ASX Diagnostic Scanner")
 
-# --- SIDEBAR CONTROLS ---
-st.sidebar.header("Scan Parameters")
-target_streak = st.sidebar.slider("Required Recovery Streak (Days)", 1, 5, 4, 
-                                 help="How many days in a row must the Log(MA20/MA50) have improved?")
-mkt_cap_min = st.sidebar.number_input("Min Market Cap ($M)", value=50) * 1_000_000
-mkt_cap_max = st.sidebar.number_input("Max Market Cap ($M)", value=5000) * 1_000_000
+# --- PARAMETERS ---
+streak = st.sidebar.slider("Streak Days", 0, 5, 1) # Set to 0 to see ALL stocks
+show_all = st.sidebar.checkbox("Show all stocks (Ignore momentum)", value=False)
 
-# --- MEMORY INITIALIZATION ---
-if 'scan_results' not in st.session_state:
-    st.session_state.scan_results = None
-if 'found_data' not in st.session_state:
-    st.session_state.found_data = {}
-
-def run_strategy():
-    # 1. FETCH TICKERS
+def run_diagnostic():
+    # 1. Fetch Tickers
     url = "https://www.asx.com.au/asx/research/ASXListedCompanies.csv"
     try:
-        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+        res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         df_asx = pd.read_csv(io.StringIO(res.text), skiprows=2)
         df_asx.columns = df_asx.columns.str.strip()
-        
-        target_groups = [
-            'Software & Services', 'Technology Hardware & Equipment', 
-            'Semiconductors & Semiconductor Equipment', 'Capital Goods',
-            'Commercial & Professional Services'
-        ]
+        # Adding 'Materials' to find the resilient gold/lithium stocks
+        target_groups = ['Software & Services', 'Capital Goods', 'Materials', 'Health Care Equipment & Services']
         
         sec_col = [c for c in df_asx.columns if 'industry' in c.lower()][0]
         cod_col = [c for c in df_asx.columns if 'code' in c.lower()][0]
         
         filtered_df = df_asx[df_asx[sec_col].isin(target_groups)]
-        tickers = [f"{c}.AX" for c in filtered_df[cod_col]]
+        # Limiting to top 100 for a fast diagnostic
+        tickers = [f"{c}.AX" for c in filtered_df[cod_col]][:100]
     except Exception as e:
-        st.error(f"ASX Load Error: {e}")
+        st.error(f"ASX CSV Error: {e}")
         return
 
-    # 2. BATCH DOWNLOAD
-    status_text = st.empty()
-    status_text.info(f"⚡ Downloading {len(tickers)} tickers. Please wait...")
+    st.info(f"Scanning {len(tickers)} tickers... (May 13, 2026 Market Data)")
     
-    data = yf.download(tickers, period="300d", interval="1d", group_by='column', progress=False)
-    close_prices = data['Close']
-    volumes = data['Volume']
+    # 2. Batch Download
+    data = yf.download(tickers, period="100d", interval="1d", group_by='column', progress=False)
     
-    final_results = []
-    temp_found_data = {}
+    if data.empty:
+        st.error("🚨 Yahoo Finance returned NO data. You may be rate-limited. Try again in 15 mins.")
+        return
 
-    # 3. ANALYSIS LOOP
-    for i, ticker in enumerate(tickers):
-        if i % 25 == 0:
-            status_text.info(f"Processing Recovery: {i}/{len(tickers)}...")
-            
+    results = []
+    
+    for ticker in tickers:
         try:
-            p = close_prices[ticker].dropna()
-            v = volumes[ticker].dropna()
-            if len(p) < 60: continue
-
-            # Calculation: Log Spread
+            p = data['Close'][ticker].dropna()
+            if len(p) < 50: continue
+            
             ma20 = p.rolling(20).mean()
             ma50 = p.rolling(50).mean()
             log_spread = np.log(ma20 / ma50)
+            diff = log_spread.diff()
             
-            # Change in Log Spread
-            diff = log_spread.diff() 
-            recent_diffs = diff.tail(target_streak)
+            # Momentum logic
+            is_recovering = (diff.tail(streak) > 0).all() if streak > 0 else True
+            is_in_pullback = log_spread.iloc[-1] < 0
             
-            # CORE CRITERIA: 
-            # 1. Negative Spread (Pullback) 
-            # 2. X days of positive improvement (Curling)
-            if log_spread.iloc[-1] < 0:
-                
-                # Fetching Market Cap ONLY for technical qualifiers
-                info = yf.Ticker(ticker).fast_info
-                mcap = info.get('market_cap', 0)
-                
-                if mkt_cap_min <= mcap <= mkt_cap_max:
-                    turnover = (p * v).tail(20).mean()
-                    sector_label = filtered_df[filtered_df[cod_col] == ticker.replace('.AX','')][sec_col].values[0]
-                    ma200 = p.rolling(200).mean() # For visual reference only
-                    
-                    final_results.append({
-                        "Ticker": ticker,
-                        "Sector": sector_label,
-                        "Price": round(p.iloc[-1], 3),
-                        "Mkt Cap": f"${int(mcap/1_000_000)}M",
-                        "Log Gap": round(log_spread.iloc[-1], 4),
-                        "Turnover": f"${int(turnover/1000)}k"
-                    })
-                    temp_found_data[ticker] = pd.DataFrame({
-                        'Close': p, 'MA20': ma20, 'MA50': ma50, 'MA200': ma200, 'LogSpread': log_spread
-                    })
+            # Diagnostic: Add everything if 'show_all' is checked, otherwise apply filters
+            if show_all or (is_recovering and is_in_pullback):
+                results.append({
+                    "Ticker": ticker,
+                    "Price": round(p.iloc[-1], 3),
+                    "Log Gap": round(log_spread.iloc[-1], 4),
+                    "Status": "Matched" if (is_recovering and is_in_pullback) else "Diagnostic"
+                })
         except: continue
 
-    status_text.empty()
-    st.session_state.scan_results = pd.DataFrame(final_results) if final_results else None
-    st.session_state.found_data = temp_found_data
+    if results:
+        st.write(pd.DataFrame(results))
+    else:
+        st.warning("Still no matches. The market sell-off today is likely too deep for a recovery signal.")
 
-# --- APP FLOW ---
-if st.button('🚀 Run Alpha Recovery Scan'):
-    run_strategy()
-
-if st.session_state.scan_results is not None:
-    df_final = st.session_state.scan_results.sort_values("Log Gap")
-    st.success(f"Found {len(df_final)} recoveries with a {target_streak}-day positive streak!")
-    st.dataframe(df_final, use_container_width=True)
-
-    st.divider()
-    selected_ticker = st.selectbox("Detailed Chart View", df_final['Ticker'].tolist())
-    
-    if selected_ticker and selected_ticker in st.session_state.found_data:
-        df_plot = st.session_state.found_data[selected_ticker].tail(120)
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-        
-        # LOG SPREAD (LEFT AXIS)
-        fig.add_trace(go.Scatter(
-            x=df_plot.index, y=df_plot['LogSpread'], 
-            name='Log Gap (Recovery)', line=dict(color='lime', width=1.5),
-            fill='tozeroy', fillcolor='rgba(0, 255, 0, 0.1)'
-        ), secondary_y=True)
-
-        # PRICE & MAs (RIGHT AXIS)
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Close'], name='Price', line=dict(color='white', width=2)), secondary_y=False)
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], name='MA20', line=dict(color='yellow', width=1.5)), secondary_y=False)
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA50'], name='MA50', line=dict(color='royalblue', width=1.5)), secondary_y=False)
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA200'], name='MA200 (Ref Only)', line=dict(color='#ff4b4b', width=2, dash='dot')), secondary_y=False)
-
-        # THEME OVERRIDES
-        fig.update_layout(
-            paper_bgcolor='black', plot_bgcolor='black', font=dict(color='white'),
-            xaxis_rangeslider_visible=False, height=700,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(color="white")),
-            yaxis=dict(title="Price ($)", side="right", gridcolor='#333333', tickfont=dict(color="white")),
-            yaxis2=dict(title="Log Gap", side="left", showgrid=False, zeroline=True, zerolinecolor='white', tickfont=dict(color="white")),
-            xaxis=dict(gridcolor='#333333', tickfont=dict(color="white"))
-        )
-        st.plotly_chart(fig, use_container_width=True)
-elif st.session_state.scan_results is None and 'scan_results' in st.session_state:
-    st.warning("No recoveries found matching that streak. Today's market sell-off may have broken the momentum of many stocks.")
+if st.button("Run Diagnostic"):
+    run_diagnostic()
