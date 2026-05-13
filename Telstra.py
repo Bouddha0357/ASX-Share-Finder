@@ -81,7 +81,7 @@ def run_strategy():
             # CORE CRITERIA: 
             # 1. Negative Spread (Pullback) 
             # 2. X days of positive improvement (Curling)
-            if log_spread.iloc[-1] < 0 and (recent_diffs > 0).all():
+            if log_spread.iloc[-1] < 0:
                 
                 # Fetching Market Cap ONLY for technical qualifiers
                 info = yf.Ticker(ticker).fast_info
