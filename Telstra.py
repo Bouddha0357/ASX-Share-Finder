@@ -40,29 +40,34 @@ def run_tracker():
         st.error(f"ASX Load Error: {e}")
         return
 
-    # 2. PROGRESSIVE DOWNLOADING & ANALYSIS
+    # 2. BATCH DOWNLOADING (The "Fix")
+    status_text = st.empty()
+    status_text.info(f"⚡ Batch downloading {len(tickers)} shares... please wait.")
+    
+    # Download everything at once to avoid rate limiting
+    data = yf.download(tickers, period="1y", interval="1d", group_by='ticker', progress=False)
+    
+    if data.empty:
+        status_text.error("🚨 Yahoo Finance returned no data. Your IP might be temporarily throttled.")
+        return
+
     results = []
     temp_charts = {}
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    ticker_count = len(tickers)
-    
-    for i, ticker in enumerate(tickers):
-        progress_bar.progress((i + 1) / ticker_count)
-        status_text.info(f"🔍 Processing {i+1}/{ticker_count}: **{ticker}**")
-        
+    # 3. ANALYSIS
+    for ticker in tickers:
         try:
-            # Fetch data
-            df = yf.download(ticker, period="1y", progress=False, interval="1d")
+            # Handle the MultiIndex dataframe from the batch download
+            ticker_data = data[ticker].dropna(subset=['Close'])
             
-            if df.empty or len(df) < 55: continue
+            if len(ticker_data) < 55: continue
                 
-            p = df['Close'].dropna()
+            p = ticker_data['Close']
 
             # Technical Calculations
             ma20 = p.rolling(20).mean()
             ma50 = p.rolling(50).mean()
+            # Log Spread Calculation: ln(MA20 / MA50)
             log_spread = np.log(ma20 / ma50)
             
             # Check 4-day positive progression
@@ -90,7 +95,7 @@ def run_tracker():
         st.session_state.all_data = pd.DataFrame(results)
         st.session_state.charts = temp_charts
     else:
-        status_text.warning("⚠️ No valid data retrieved.")
+        status_text.warning("⚠️ No stocks matched the data requirements.")
         st.session_state.all_data = None
 
 # --- EXECUTION ---
@@ -110,8 +115,6 @@ if st.session_state.all_data is not None and not st.session_state.all_data.empty
         df_to_show = df_to_show[df_to_show["4D Progression"] == "No"]
 
     st.subheader(f"Results ({len(df_to_show)} shares)")
-    
-    # Simple table display without Market Cap
     st.dataframe(
         df_to_show[["Ticker", "Price", "Log Spread", "4D Progression"]], 
         use_container_width=True, 
@@ -140,7 +143,7 @@ if st.session_state.all_data is not None and not st.session_state.all_data.empty
             fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], name="MA20", line=dict(color='#FFFF00', dash='dot')), secondary_y=False)
             fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA50'], name="MA50", line=dict(color='#4169E1', dash='dot')), secondary_y=False)
 
-            # DARK MODE STYLING
+            # TRUE BLACK BACKGROUND STYLING
             fig.update_layout(
                 paper_bgcolor='black',
                 plot_bgcolor='black',
@@ -149,18 +152,16 @@ if st.session_state.all_data is not None and not st.session_state.all_data.empty
                 hovermode="x unified",
                 legend=dict(font=dict(color='white')),
                 xaxis=dict(
-                    showgrid=True, gridcolor='#333333', 
-                    tickfont=dict(color='white'), titlefont=dict(color='white')
+                    showgrid=True, gridcolor='#222222', 
+                    tickfont=dict(color='white'), title="Date"
                 ),
                 yaxis=dict(
-                    showgrid=True, gridcolor='#333333', 
-                    tickfont=dict(color='white'), titlefont=dict(color='white'),
-                    title="Price ($)"
+                    showgrid=True, gridcolor='#222222', 
+                    tickfont=dict(color='white'), title="Price ($)"
                 ),
                 yaxis2=dict(
                     showgrid=False, 
-                    tickfont=dict(color='white'), titlefont=dict(color='white'),
-                    title="Log Momentum"
+                    tickfont=dict(color='white'), title="Log Momentum"
                 )
             )
             st.plotly_chart(fig, use_container_width=True)
