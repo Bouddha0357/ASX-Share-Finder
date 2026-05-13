@@ -53,16 +53,12 @@ def run_tracker():
         status_text.info(f"🔍 Processing {i+1}/{ticker_count}: **{ticker}**")
         
         try:
-            t_obj = yf.Ticker(ticker)
-            # Use period="1y" to ensure we have enough data for MA50
-            df = t_obj.history(period="1y")
-            f_info = t_obj.fast_info
+            # Fetch data
+            df = yf.download(ticker, period="1y", progress=False, interval="1d")
             
-            if len(df) < 55: continue
+            if df.empty or len(df) < 55: continue
                 
             p = df['Close'].dropna()
-            mcap_val = f_info.get('market_cap', 0)
-            mcap_str = f"${int(mcap_val/1_000_000):,}M" if mcap_val > 0 else "N/A"
 
             # Technical Calculations
             ma20 = p.rolling(20).mean()
@@ -77,9 +73,8 @@ def run_tracker():
             
             results.append({
                 "Ticker": ticker,
-                "Market Cap": mcap_str,
-                "Price": round(p.iloc[-1], 3),
-                "Log Spread": round(log_spread.iloc[-1], 4),
+                "Price": round(float(p.iloc[-1]), 3),
+                "Log Spread": round(float(log_spread.iloc[-1]), 4),
                 "4D Progression": "Yes" if has_progression else "No"
             })
             
@@ -95,7 +90,7 @@ def run_tracker():
         st.session_state.all_data = pd.DataFrame(results)
         st.session_state.charts = temp_charts
     else:
-        status_text.warning("⚠️ Scan finished but no valid data was retrieved. Check your internet or Yahoo Finance status.")
+        status_text.warning("⚠️ No valid data retrieved.")
         st.session_state.all_data = None
 
 # --- EXECUTION ---
@@ -106,44 +101,66 @@ if st.button('🚀 Start Real-Time ASX Scan'):
 if st.session_state.all_data is not None and not st.session_state.all_data.empty:
     st.divider()
     
-    # Check if 'Market Cap' exists before proceeding (Safety for KeyError)
-    if "Market Cap" in st.session_state.all_data.columns:
-        filter_choice = st.radio("Filter by Progression:", ["All", "Yes Only", "No Only"], horizontal=True)
-        
-        df_to_show = st.session_state.all_data.copy()
-        if filter_choice == "Yes Only":
-            df_to_show = df_to_show[df_to_show["4D Progression"] == "Yes"]
-        elif filter_choice == "No Only":
-            df_to_show = df_to_show[df_to_show["4D Progression"] == "No"]
+    filter_choice = st.radio("Filter by Progression:", ["All", "Yes Only", "No Only"], horizontal=True)
+    
+    df_to_show = st.session_state.all_data.copy()
+    if filter_choice == "Yes Only":
+        df_to_show = df_to_show[df_to_show["4D Progression"] == "Yes"]
+    elif filter_choice == "No Only":
+        df_to_show = df_to_show[df_to_show["4D Progression"] == "No"]
 
-        st.subheader(f"Results ({len(df_to_show)} shares)")
-        
-        # Display table
-        st.dataframe(
-            df_to_show[["Ticker", "Market Cap", "Price", "Log Spread", "4D Progression"]], 
-            use_container_width=True, 
-            height=500
-        )
+    st.subheader(f"Results ({len(df_to_show)} shares)")
+    
+    # Simple table display without Market Cap
+    st.dataframe(
+        df_to_show[["Ticker", "Price", "Log Spread", "4D Progression"]], 
+        use_container_width=True, 
+        height=500
+    )
 
-        # --- CHARTING ---
-        st.divider()
-        st.subheader("Visual Momentum Chart")
-        ticker_list = df_to_show['Ticker'].tolist()
-        if ticker_list:
-            selected_ticker = st.selectbox("Select a Ticker for detail:", ticker_list)
+    # --- CHARTING ---
+    st.divider()
+    st.subheader("Visual Momentum Chart")
+    ticker_list = df_to_show['Ticker'].tolist()
+    if ticker_list:
+        selected_ticker = st.selectbox("Select a Ticker for detail:", ticker_list)
+        
+        if selected_ticker and selected_ticker in st.session_state.charts:
+            df_plot = st.session_state.charts[selected_ticker]
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
             
-            if selected_ticker and selected_ticker in st.session_state.charts:
-                df_plot = st.session_state.charts[selected_ticker]
-                fig = make_subplots(specs=[[{"secondary_y": True}]])
-                
-                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['LogSpread'], name="Log(MA20/MA50)", 
-                                         line=dict(color='#00ff00', width=3), fill='tozeroy'), secondary_y=True)
+            # Momentum Line
+            fig.add_trace(go.Scatter(
+                x=df_plot.index, y=df_plot['LogSpread'], name="Log(MA20/MA50)", 
+                line=dict(color='#00ff00', width=3), fill='tozeroy'
+            ), secondary_y=True)
 
-                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Close'], name="Price", line=dict(color='white')), secondary_y=False)
-                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], name="MA20", line=dict(color='yellow', dash='dot')), secondary_y=False)
-                fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA50'], name="MA50", line=dict(color='royalblue', dash='dot')), secondary_y=False)
+            # Price and MAs
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Close'], name="Price", line=dict(color='white')), secondary_y=False)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], name="MA20", line=dict(color='#FFFF00', dash='dot')), secondary_y=False)
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA50'], name="MA50", line=dict(color='#4169E1', dash='dot')), secondary_y=False)
 
-                fig.update_layout(template="plotly_dark", height=600, hovermode="x unified")
-                st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.error("Data structure error: 'Market Cap' column missing from results.")
+            # DARK MODE STYLING
+            fig.update_layout(
+                paper_bgcolor='black',
+                plot_bgcolor='black',
+                font=dict(color='white'),
+                height=600,
+                hovermode="x unified",
+                legend=dict(font=dict(color='white')),
+                xaxis=dict(
+                    showgrid=True, gridcolor='#333333', 
+                    tickfont=dict(color='white'), titlefont=dict(color='white')
+                ),
+                yaxis=dict(
+                    showgrid=True, gridcolor='#333333', 
+                    tickfont=dict(color='white'), titlefont=dict(color='white'),
+                    title="Price ($)"
+                ),
+                yaxis2=dict(
+                    showgrid=False, 
+                    tickfont=dict(color='white'), titlefont=dict(color='white'),
+                    title="Log Momentum"
+                )
+            )
+            st.plotly_chart(fig, use_container_width=True)
