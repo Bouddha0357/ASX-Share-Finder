@@ -8,22 +8,17 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # --- APP CONFIG ---
-st.set_page_config(page_title="ASX Alpha Pro", layout="wide")
-st.title("🚀 ASX Alpha: Log-Recovery Dashboard")
-
-# --- SIDEBAR SETTINGS ---
-st.sidebar.header("Strategy Filters")
-target_streak = st.sidebar.slider("Recovery Streak (Days)", 1, 5, 2, help="Days log-spread must be rising")
-mcap_min = st.sidebar.number_input("Min Market Cap ($M)", value=10) * 1_000_000
-mcap_max = st.sidebar.number_input("Max Market Cap ($M)", value=750) * 1_000_000
+st.set_page_config(page_title="ASX Log-Momentum Tracker", layout="wide")
+st.title("📈 ASX Tech & Industrials: 4-Day Momentum Tracker")
+st.markdown("Monitoring the 4-day progression of **Log(MA20/MA50)** across Software, IT, and Capital Goods.")
 
 # --- MEMORY ---
-if 'scan_results' not in st.session_state:
-    st.session_state.scan_results = None
-if 'found_data' not in st.session_state:
-    st.session_state.found_data = {}
+if 'all_data' not in st.session_state:
+    st.session_state.all_data = None
+if 'charts' not in st.session_state:
+    st.session_state.charts = {}
 
-def run_strategy():
+def run_tracker():
     # 1. FETCH TICKERS
     url = "https://www.asx.com.au/asx/research/ASXListedCompanies.csv"
     try:
@@ -31,9 +26,10 @@ def run_strategy():
         df_asx = pd.read_csv(io.StringIO(res.text), skiprows=2)
         df_asx.columns = df_asx.columns.str.strip()
         
-        # Sector Targets
+        # Filtered List (Removed Materials)
         target_groups = [
-            'Software & Services', 'Capital Goods', 'Materials', 
+            'Software & Services', 
+            'Capital Goods', 
             'Technology Hardware & Equipment'
         ]
         
@@ -46,108 +42,122 @@ def run_strategy():
         st.error(f"ASX Load Error: {e}")
         return
 
+    # 2. PROGRESSIVE DOWNLOADING & ANALYSIS
+    results = []
+    temp_charts = {}
+    
+    # Progress UI
+    progress_bar = st.progress(0)
     status_text = st.empty()
-    status_text.info(f"⚡ Downloading data for {len(tickers)} tickers...")
     
-    # 2. BATCH DOWNLOAD
-    data = yf.download(tickers, period="260d", interval="1d", group_by='column', progress=False)
+    # Process in chunks to keep the UI "moving" and visual
+    chunk_size = 10
+    total_tickers = len(tickers)
     
-    if data.empty or 'Close' not in data:
-        st.error("🚨 Yahoo Finance returned no data. You may be rate-limited. Wait 15 mins.")
-        return
-
-    close_prices = data['Close']
-    volumes = data['Volume']
-    
-    final_results = []
-    temp_found_data = {}
-
-    # 3. ANALYSIS LOOP
-    for i, ticker in enumerate(tickers):
-        if i % 50 == 0:
-            status_text.info(f"Analyzing: {i}/{len(tickers)} stocks...")
+    for i in range(0, total_tickers, chunk_size):
+        chunk = tickers[i:i + chunk_size]
+        
+        # Update Visuals
+        percent_complete = min(i / total_tickers, 1.0)
+        progress_bar.progress(percent_complete)
+        status_text.info(f"🔍 Scanning {i}/{total_tickers}: Currently checking {', '.join(chunk[:3])}...")
+        
+        # Download Chunk
+        data = yf.download(chunk, period="150d", interval="1d", group_by='column', progress=False)
+        
+        if data.empty:
+            continue
             
-        try:
-            # Skip tickers with no data
-            if ticker not in close_prices or close_prices[ticker].dropna().empty:
+        for ticker in chunk:
+            try:
+                if ticker not in data['Close']: continue
+                
+                p = data['Close'][ticker].dropna()
+                if len(p) < 60: continue
+
+                # Technical Calculations
+                ma20 = p.rolling(20).mean()
+                ma50 = p.rolling(50).mean()
+                log_spread = np.log(ma20 / ma50)
+                
+                # Check 4-day positive progression
+                diff = log_spread.diff()
+                recent_diffs = diff.tail(4)
+                
+                # Progression is true if all last 4 changes are > 0
+                has_progression = (recent_diffs > 0).all()
+                
+                results.append({
+                    "Ticker": ticker,
+                    "Price": round(p.iloc[-1], 3),
+                    "Log Spread": round(log_spread.iloc[-1], 4),
+                    "4D Progression": "✅ YES" if has_progression else "❌ No"
+                })
+                
+                # Save data for the chart if user clicks later
+                temp_charts[ticker] = pd.DataFrame({
+                    'Close': p, 'MA20': ma20, 'MA50': ma50, 'LogSpread': log_spread
+                }).tail(80)
+                
+            except:
                 continue
-                
-            p = close_prices[ticker].dropna()
-            v = volumes[ticker].dropna()
-            if len(p) < 60: continue
 
-            # Technicals
-            ma20 = p.rolling(20).mean()
-            ma50 = p.rolling(50).mean()
-            log_spread = np.log(ma20 / ma50)
-            
-            # Log Spread Change
-            diff = log_spread.diff()
-            
-            # CRITERIA: 
-            # 1. Rising for X days
-            # 2. Still in a pullback (negative gap)
-            is_curling = (diff.tail(target_streak) > 0).all()
-            is_pullback = log_spread.iloc[-1] < 0
-            
-            if is_curling and is_pullback:
-                # Market Cap Check
-                info = yf.Ticker(ticker).fast_info
-                mcap = info.get('market_cap', 0)
-                
-                if mcap_min <= mcap <= mcap_max:
-                    turnover = (p * v).tail(20).mean()
-                    # Filter for minimum liquidity ($10k/day)
-                    if turnover < 10_000: continue
-                    
-                    final_results.append({
-                        "Ticker": ticker,
-                        "Price": round(p.iloc[-1], 3),
-                        "Mkt Cap": f"${int(mcap/1_000_000)}M",
-                        "Log Gap": round(log_spread.iloc[-1], 4),
-                        "Turnover": f"${int(turnover/1000)}k"
-                    })
-                    temp_found_data[ticker] = pd.DataFrame({
-                        'Close': p, 'MA20': ma20, 'MA50': ma50, 'LogSpread': log_spread
-                    })
-        except: continue
-
-    status_text.empty()
-    st.session_state.scan_results = pd.DataFrame(final_results) if final_results else None
-    st.session_state.found_data = temp_found_data
-
-# --- UI LOGIC ---
-if st.button('🚀 Execute Alpha Scan'):
-    run_strategy()
-
-if st.session_state.scan_results is not None:
-    df_final = st.session_state.scan_results.sort_values("Log Gap", ascending=False)
-    st.success(f"Found {len(df_final)} setups!")
-    st.dataframe(df_final, use_container_width=True)
-
-    st.divider()
-    selected_ticker = st.selectbox("Detailed Analysis", df_final['Ticker'].tolist())
+    status_text.success("✅ Scan Complete!")
+    progress_bar.progress(1.0)
     
-    if selected_ticker and selected_ticker in st.session_state.found_data:
-        df_plot = st.session_state.found_data[selected_ticker].tail(100)
+    st.session_state.all_data = pd.DataFrame(results)
+    st.session_state.charts = temp_charts
+
+# --- EXECUTION ---
+if st.button('🚀 Start Real-Time ASX Scan'):
+    run_tracker()
+
+# --- DISPLAY TABLE ---
+if st.session_state.all_data is not None:
+    st.subheader("ASX Tracker Results")
+    
+    # Sort so that the "YES" results are at the top
+    display_df = st.session_state.all_data.sort_values("4D Progression", ascending=False)
+    
+    # Display full table
+    st.dataframe(
+        display_df, 
+        use_container_width=True, 
+        height=400,
+        column_config={
+            "4D Progression": st.column_config.TextColumn("4D Progression", help="Log(MA20/MA50) has risen 4 days in a row")
+        }
+    )
+
+    # --- CHARTING ---
+    st.divider()
+    st.subheader("Visual Momentum Chart")
+    selected_ticker = st.selectbox("Select a Ticker to view progression details:", display_df['Ticker'].tolist())
+    
+    if selected_ticker and selected_ticker in st.session_state.charts:
+        df_plot = st.session_state.charts[selected_ticker]
+        
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         
-        # LOG RECOVERY (LEFT AXIS)
+        # The Momentum Line (Log Spread)
         fig.add_trace(go.Scatter(
-            x=df_plot.index, y=df_plot['LogSpread'], name="Log Recovery", 
-            line=dict(color='lime', width=2), fill='tozeroy'
+            x=df_plot.index, y=df_plot['LogSpread'], 
+            name="Log(MA20/MA50)", 
+            line=dict(color='#00ff00', width=3),
+            fill='tozeroy'
         ), secondary_y=True)
 
-        # PRICE & MAs (RIGHT AXIS)
+        # The Price & MAs
         fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Close'], name="Price", line=dict(color='white')), secondary_y=False)
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], name="MA20", line=dict(color='yellow')), secondary_y=False)
-        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA50'], name="MA50", line=dict(color='royalblue')), secondary_y=False)
+        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA20'], name="MA20", line=dict(color='yellow', dash='dot')), secondary_y=False)
+        fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['MA50'], name="MA50", line=dict(color='royalblue', dash='dot')), secondary_y=False)
 
         fig.update_layout(
-            paper_bgcolor='black', plot_bgcolor='black', font=dict(color='white'),
-            xaxis_rangeslider_visible=False, height=600,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            template="plotly_dark",
+            height=600,
+            xaxis_title="Date",
+            yaxis_title="Price ($)",
+            yaxis2_title="Momentum (Log Spread)",
+            hovermode="x unified"
         )
         st.plotly_chart(fig, use_container_width=True)
-elif st.session_state.scan_results is None and 'scan_results' in st.session_state:
-    st.warning("No stocks passed the momentum filters. The current market sell-off has likely broken the recovery streaks for most companies.")
